@@ -19,15 +19,6 @@ def match_face(face_emb, db_embeddings, threshold=0.5):
             best_match = db_face
     return best_match, max_sim
 
-def grab_snapshot():
-    idx = int(os.environ.get("CAMERA_INDEX", 1))
-    cap = cv2.VideoCapture(idx)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(0)
-    ret, frame = cap.read()
-    cap.release()
-    return frame if ret else None
-
 # ==========================================
 # CONFIGURATION & INITIALIZATION
 # ==========================================
@@ -175,81 +166,74 @@ elif role == "Teacher":
 
     if not st.session_state['session_active']:
         st.info("🔴 No active session. Please authenticate via facial scan.")
-        if st.button("Scan Now (Start Session)"):
-            with st.spinner("Accessing camera and verifying Teacher..."):
-                frame = grab_snapshot()
-                if frame is not None:
-                    # Convert BGR to RGB for Streamlit rendering
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    st.image(frame_rgb, caption="Snapshot Captured", use_column_width=True)
-                    
-                    faces = face_app.get(frame)
-                    if len(faces) > 0:
-                        if supabase:
-                            res = supabase.table("teachers").select("id, name, subject, facial_embedding").execute()
-                            teachers = []
-                            for r in res.data:
-                                if r.get("facial_embedding"):
-                                    teachers.append({"id": r["id"], "name": r["name"], "subject": r.get("subject", "General"), "embedding": np.array(r["facial_embedding"])})
-                            
-                            match, sim = match_face(faces[0].embedding, teachers)
-                            if match:
-                                st.session_state['session_active'] = True
-                                st.session_state['teacher_name'] = match['name']
-                                st.session_state['teacher_subject'] = match['subject']
-                                st.rerun()
-                            else:
-                                st.error(f"Verification Failed: Unrecognized Face. (Highest Similarity: {sim:.2f})")
+        teacher_photo = st.camera_input("Teacher Authentication", key="teacher_cam")
+        
+        if teacher_photo is not None:
+            with st.spinner("Verifying Teacher..."):
+                bytes_data = teacher_photo.getvalue()
+                frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+                
+                faces = face_app.get(frame)
+                if len(faces) > 0:
+                    if supabase:
+                        res = supabase.table("teachers").select("id, name, subject, facial_embedding").execute()
+                        teachers = []
+                        for r in res.data:
+                            if r.get("facial_embedding"):
+                                teachers.append({"id": r["id"], "name": r["name"], "subject": r.get("subject", "General"), "embedding": np.array(r["facial_embedding"])})
+                        
+                        match, sim = match_face(faces[0].embedding, teachers)
+                        if match:
+                            st.session_state['session_active'] = True
+                            st.session_state['teacher_name'] = match['name']
+                            st.session_state['teacher_subject'] = match['subject']
+                            st.rerun()
                         else:
-                            st.warning("Database disconnected.")
+                            st.error(f"Verification Failed: Unrecognized Face. (Highest Similarity: {sim:.2f})")
                     else:
-                        st.error("No face detected in the frame. Please make sure your face is visible and well-lit.")
+                        st.warning("Database disconnected.")
                 else:
-                    st.error("Camera access failed.")
+                    st.error("No face detected in the frame. Please make sure your face is visible and well-lit.")
     else:
         st.success(f"🟢 Active Session: **{st.session_state['teacher_subject']}** | Teacher: **{st.session_state['teacher_name']}**")
         
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Scan Students"):
-                with st.spinner("Executing 512D spatial scan on classroom..."):
-                    frame = grab_snapshot()
-                    if frame is not None:
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        st.image(frame_rgb, caption="Classroom Snapshot Captured", use_column_width=True)
-                        
-                        faces = face_app.get(frame)
-                        if supabase:
-                            res = supabase.table("students").select("id, name, facial_embedding").execute()
-                            students_db = []
-                            for r in res.data:
-                                if r.get("facial_embedding"):
-                                    students_db.append({"id": r["id"], "name": r["name"], "embedding": np.array(r["facial_embedding"])})
+        student_photo = st.camera_input("Scan Classroom Focus", key="student_cam")
+        
+        if student_photo is not None:
+            with st.spinner("Executing 512D spatial scan on classroom..."):
+                bytes_data = student_photo.getvalue()
+                frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+                
+                faces = face_app.get(frame)
+                if supabase:
+                    res = supabase.table("students").select("id, name, facial_embedding").execute()
+                    students_db = []
+                    for r in res.data:
+                        if r.get("facial_embedding"):
+                            students_db.append({"id": r["id"], "name": r["name"], "embedding": np.array(r["facial_embedding"])})
+                    
+                    present = []
+                    for face in faces:
+                        match, sim = match_face(face.embedding, students_db)
+                        if match and match['name'] not in present:
+                            present.append(match['name'])
                             
-                            present = []
-                            for face in faces:
-                                match, sim = match_face(face.embedding, students_db)
-                                if match and match['name'] not in present:
-                                    present.append(match['name'])
-                                    
-                            st.session_state['present_students'] = present
-                            st.success(f"Scan complete! Found {len(present)} students.")
-                        else:
-                            st.warning("Database disconnected.")
-                    else:
-                        st.error("Camera error.")
-        with c2:
-            if st.button("End Session"):
-                st.session_state['session_active'] = False
-                st.session_state['present_students'] = []
-                st.rerun()
+                    st.session_state['present_students'] = present
+                    st.success(f"Scan complete! Found {len(present)} students.")
+                else:
+                    st.warning("Database disconnected.")
 
         st.subheader("Session Roster")
         if len(st.session_state['present_students']) > 0:
             for s in st.session_state['present_students']:
                 st.markdown(f"#### ✅ {s} \n*(Marked Present)*")
         else:
-            st.info("No students detected yet. Click 'Scan Students' to update roster.")
+            st.info("No students detected yet. Take a snapshot to update the roster.")
+            
+        if st.button("End Session"):
+            st.session_state['session_active'] = False
+            st.session_state['present_students'] = []
+            st.rerun()
     
 # ==========================================
 # STUDENT/PARENT DASHBOARD
