@@ -9,6 +9,25 @@ import insightface
 from insightface.app import FaceAnalysis
 import cv2
 
+def match_face(face_emb, db_embeddings, threshold=0.5):
+    best_match = None
+    max_sim = -1
+    for db_face in db_embeddings:
+        sim = np.dot(face_emb, db_face['embedding']) / (np.linalg.norm(face_emb) * np.linalg.norm(db_face['embedding']))
+        if sim > max_sim and sim > threshold:
+            max_sim = sim
+            best_match = db_face
+    return best_match, max_sim
+
+def grab_snapshot():
+    idx = int(os.environ.get("CAMERA_INDEX", 1))
+    cap = cv2.VideoCapture(idx)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0)
+    ret, frame = cap.read()
+    cap.release()
+    return frame if ret else None
+
 # ==========================================
 # CONFIGURATION & INITIALIZATION
 # ==========================================
@@ -146,26 +165,84 @@ if role == "Admin":
 # ==========================================
 elif role == "Teacher":
     st.title("Teacher Dashboard 👨‍🏫")
-    st.markdown("Live classroom metrics and automated disciplinary alerts.")
+    st.markdown("Automated attendance snapshot system.")
     
-    st.info("🟢 Active Session Detected. Subject: **Computer Science 101** | Time Remaining: **45 mins**")
-    
-    # KPIs
-    c1, c2, c3 = st.columns(3)
-    c1.markdown("<div class='metric-container'><h3>Total Enrolled</h3><p class='metric-value'>30</p></div>", unsafe_allow_html=True)
-    c2.markdown("<div class='metric-container'><h3>Live Occupancy</h3><p class='metric-value'>28</p></div>", unsafe_allow_html=True)
-    c3.markdown("<div class='metric-container'><h3>Bunks / Exits</h3><p class='metric-value' style='color:#d62728'>2</p></div>", unsafe_allow_html=True)
+    if 'session_active' not in st.session_state:
+        st.session_state['session_active'] = False
+        st.session_state['teacher_name'] = ""
+        st.session_state['teacher_subject'] = ""
+        st.session_state['present_students'] = []
 
-    st.subheader("Disciplinary Alerts (2-Scan Rule)")
-    st.error("The following students have missed 2 consecutive autonomous 10-minute interval scans.")
-    alerts_data = pd.DataFrame([
-        {"Student Name": "John Doe", "Status": "Bunked (Missing for 20m)", "Estimated Time of Flight": "10:20 AM"},
-        {"Student Name": "Jane Smith", "Status": "Early Exit", "Estimated Time of Flight": "11:00 AM"}
-    ])
-    st.table(alerts_data)
-    
-    st.subheader("Session Roster")
-    st.write("Current detected entities in the room.")
+    if not st.session_state['session_active']:
+        st.info("🔴 No active session. Please authenticate via facial scan.")
+        if st.button("Scan Now (Start Session)"):
+            with st.spinner("Accessing camera and verifying Teacher..."):
+                frame = grab_snapshot()
+                if frame is not None:
+                    faces = face_app.get(frame)
+                    if len(faces) > 0:
+                        if supabase:
+                            res = supabase.table("teachers").select("id, name, subject, facial_embedding").execute()
+                            teachers = []
+                            for r in res.data:
+                                if r.get("facial_embedding"):
+                                    teachers.append({"id": r["id"], "name": r["name"], "subject": r.get("subject", "General"), "embedding": np.array(r["facial_embedding"])})
+                            
+                            match, sim = match_face(faces[0].embedding, teachers)
+                            if match:
+                                st.session_state['session_active'] = True
+                                st.session_state['teacher_name'] = match['name']
+                                st.session_state['teacher_subject'] = match['subject']
+                                st.rerun()
+                            else:
+                                st.error("Verification Failed: Unrecognized Face.")
+                        else:
+                            st.warning("Database disconnected.")
+                    else:
+                        st.error("No face detected in the frame. Please try again.")
+                else:
+                    st.error("Camera access failed.")
+    else:
+        st.success(f"🟢 Active Session: **{st.session_state['teacher_subject']}** | Teacher: **{st.session_state['teacher_name']}**")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Scan Students"):
+                with st.spinner("Executing 512D spatial scan on classroom..."):
+                    frame = grab_snapshot()
+                    if frame is not None:
+                        faces = face_app.get(frame)
+                        if supabase:
+                            res = supabase.table("students").select("id, name, facial_embedding").execute()
+                            students_db = []
+                            for r in res.data:
+                                if r.get("facial_embedding"):
+                                    students_db.append({"id": r["id"], "name": r["name"], "embedding": np.array(r["facial_embedding"])})
+                            
+                            present = []
+                            for face in faces:
+                                match, sim = match_face(face.embedding, students_db)
+                                if match and match['name'] not in present:
+                                    present.append(match['name'])
+                                    
+                            st.session_state['present_students'] = present
+                            st.success(f"Scan complete! Found {len(present)} students.")
+                        else:
+                            st.warning("Database disconnected.")
+                    else:
+                        st.error("Camera error.")
+        with c2:
+            if st.button("End Session"):
+                st.session_state['session_active'] = False
+                st.session_state['present_students'] = []
+                st.rerun()
+
+        st.subheader("Session Roster")
+        if len(st.session_state['present_students']) > 0:
+            for s in st.session_state['present_students']:
+                st.markdown(f"#### ✅ {s} \n*(Marked Present)*")
+        else:
+            st.info("No students detected yet. Click 'Scan Students' to update roster.")
     
 # ==========================================
 # STUDENT/PARENT DASHBOARD
