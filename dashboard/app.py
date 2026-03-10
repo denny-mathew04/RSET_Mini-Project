@@ -179,6 +179,10 @@ elif role == "Teacher":
             with st.spinner("Accessing camera and verifying Teacher..."):
                 frame = grab_snapshot()
                 if frame is not None:
+                    # Convert BGR to RGB for Streamlit rendering
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    st.image(frame_rgb, caption="Snapshot Captured", use_column_width=True)
+                    
                     faces = face_app.get(frame)
                     if len(faces) > 0:
                         if supabase:
@@ -195,11 +199,11 @@ elif role == "Teacher":
                                 st.session_state['teacher_subject'] = match['subject']
                                 st.rerun()
                             else:
-                                st.error("Verification Failed: Unrecognized Face.")
+                                st.error(f"Verification Failed: Unrecognized Face. (Highest Similarity: {sim:.2f})")
                         else:
                             st.warning("Database disconnected.")
                     else:
-                        st.error("No face detected in the frame. Please try again.")
+                        st.error("No face detected in the frame. Please make sure your face is visible and well-lit.")
                 else:
                     st.error("Camera access failed.")
     else:
@@ -211,6 +215,9 @@ elif role == "Teacher":
                 with st.spinner("Executing 512D spatial scan on classroom..."):
                     frame = grab_snapshot()
                     if frame is not None:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        st.image(frame_rgb, caption="Classroom Snapshot Captured", use_column_width=True)
+                        
                         faces = face_app.get(frame)
                         if supabase:
                             res = supabase.table("students").select("id, name, facial_embedding").execute()
