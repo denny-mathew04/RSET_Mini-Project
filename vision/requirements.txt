@@ -1,9 +1,0 @@
-opencv-python
-insightface
-supabase
-pandas
-numpy
-python-dotenv
-scikit-learn
-onnxruntime
-filterpy
