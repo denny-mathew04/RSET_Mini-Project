@@ -221,16 +221,24 @@ def main():
     
     print("AAPT System Started in **PASSIVE MODE**. Waiting for Teacher Face...")
     
+    frame_count = 0
+    display_faces = []
+    display_tracked = []
+    
     while True:
         ret, frame = cap.read()
         if not ret:
             break
             
+        frame_count += 1
+        
         if not is_session_active:
             # PASSIVE MODE
             cv2.putText(frame, "PASSIVE MODE - Waiting for Teacher", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            faces = app.get(frame)
-            for face in faces:
+            if frame_count % 5 == 0:
+                display_faces = app.get(frame)
+                
+            for face in display_faces:
                 if face.embedding is not None:
                     match, sim = match_face(face.embedding, teacher_embeddings)
                     if match:
@@ -242,22 +250,22 @@ def main():
             current_time = time.time()
             cv2.putText(frame, "ACTIVE SESSION", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             
-            # 1. Quadrant Zooming for high-fidelity detection
-            faces = quadrant_scan(frame)
+            # 1. Quadrant Zooming (Heavy, so process every 5th frame)
+            if frame_count % 5 == 0:
+                faces = quadrant_scan(frame)
+                # 2. Persistence / Tracking (DeepSORT placeholder)
+                bboxes = [f.bbox for f in faces]
+                display_tracked = tracker.update(bboxes)
+                
+                # 3. Recursive Interval Scanning (Bunk Detection)
+                if current_time - last_scan_time > SCAN_INTERVAL_MINUTES * 60:
+                    process_scan(faces, student_embeddings)
+                    last_scan_time = current_time
             
-            # 2. Persistence / Tracking (DeepSORT placeholder)
-            bboxes = [f.bbox for f in faces]
-            tracked_objects = tracker.update(bboxes)
-            
-            for tid, bbox in tracked_objects:
+            for tid, bbox in display_tracked:
                 # Draw bounding boxes and Object IDs (MOT)
                 cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255, 150, 0), 2)
                 cv2.putText(frame, f"Track ID: {tid}", (int(bbox[0]), int(bbox[1])-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,150,0), 2)
-            
-            # 3. Recursive Interval Scanning (Bunk Detection)
-            if current_time - last_scan_time > SCAN_INTERVAL_MINUTES * 60:
-                process_scan(faces, student_embeddings)
-                last_scan_time = current_time
                 
         cv2.imshow("AAPT - Computer Vision Pipeline", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
